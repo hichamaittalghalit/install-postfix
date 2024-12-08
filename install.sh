@@ -58,6 +58,9 @@ sudo rm -rf "$VMAIL_DIR"
 # Re-Install and Configure Everything
 ############################################
 
+# change hostname
+sudo hostnamectl set-hostname $DOMAIN
+
 echo "Updating and installing required packages..."
 sudo apt-get update -y
 
