@@ -55,11 +55,17 @@ sudo deluser --remove-home vmail || true
 sudo rm -rf "$VMAIL_DIR"
 
 ############################################
-# Re-Install and Configure Everything
+# CHANGE HOSTNAME
 ############################################
 
 # change hostname
 sudo hostnamectl set-hostname $DOMAIN
+sudo systemctl restart systemd-hostnamed
+
+
+############################################
+# Re-Install and Configure Everything
+############################################
 
 echo "Updating and installing required packages..."
 sudo apt-get update -y
