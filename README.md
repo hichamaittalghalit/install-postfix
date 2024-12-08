@@ -1,4 +1,4 @@
-### INSTAALL `git`
+### INSTALL `git`
 
 <br>
 
