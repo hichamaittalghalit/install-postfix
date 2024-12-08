@@ -380,7 +380,7 @@ EOF
 sudo tee /etc/bind/named.conf.local > /dev/null <<EOF
 zone "$DOMAIN" {
     type master;
-    file "/etc/bind/db.$DOMAIN";
+    file "$ZONE_FILE";
 };
 EOF
 
