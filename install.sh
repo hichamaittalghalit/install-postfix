@@ -463,7 +463,7 @@ echo "Creating NGINX configuration for $DOMAIN ..."
 sudo tee "$NGINX_CONF" > /dev/null <<EOF
 server {
     listen 80;
-    server_name $DOMAIN *.${DOMAIN};
+    server_name $DOMAIN www.${DOMAIN};
 
     # Redirect all HTTP requests to HTTPS
     return 301 https://\$host\$request_uri;
@@ -477,6 +477,8 @@ echo "<h1>Welcome to $DOMAIN</h1>" | sudo tee "/var/www/$DOMAIN/index.html" > /d
 # Step 6: Create a symbolic link in sites-enabled
 echo "Creating symlink to NGINX configuration in sites-enabled ..."
 sudo ln -s "$NGINX_CONF" "$NGINX_ENABLED_LINK"
+
+sudo systemctl restart nginx
 
 # Step 7: Obtain the certificate for the main domain and wildcard subdomain
 echo "Obtaining TLS certificate for $DOMAIN..."
@@ -492,7 +494,7 @@ echo "Adding SSL configuration to NGINX configuration for $DOMAIN ..."
 sudo tee "$NGINX_CONF" > /dev/null <<EOF
 server {
     listen 80;
-    server_name $DOMAIN *.$DOMAIN;
+    server_name $DOMAIN www.$DOMAIN;
 
     # Redirect all HTTP requests to HTTPS
     return 301 https://\$host\$request_uri;
@@ -500,7 +502,7 @@ server {
 
 server {
     listen 443 ssl;
-    server_name $DOMAIN *.$DOMAIN;
+    server_name $DOMAIN www.$DOMAIN;
 
     # SSL certificate paths
     ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;  # Change this path if necessary
