@@ -351,6 +351,8 @@ if [ -f "$ZONE_FILE" ]; then
     sudo rm "$ZONE_FILE"
 fi
 
+sudo mkdir -p "$ZONE_DIR"
+
 sudo apt-get install -y bind9 bind9utils
 
 # Basic Bind9 configuration for authoritative DNS
