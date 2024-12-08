@@ -372,6 +372,9 @@ zone "$DOMAIN" {
 };
 EOF
 
+# Generate the date-based serial in YYYYMMDD01 format
+SERIAL=$(date +"%Y%m%d01")
+
 DKIM_VALUE=$(cat "$DKIM_KEY_PUBLIC_FILE" | tr -d '\t' | tr -d '\n' | grep -oP '\(\s*\K[^)]*' | tr -d ' "' | sed 's/;/; /g')
 
 # Write the zone file with correct formatting
