@@ -1,24 +1,24 @@
 #!/bin/bash
 
-# Charger les variables depuis le fichier .env
-if [ -f /etc/postfix/mail_users.env ]; then
-  echo "Chargement des variables depuis /etc/postfix/mail_users.env..."
-  source /etc/postfix/mail_users.env
+# Charger les variables depuis le fichier .env dans le répertoire courant
+ENV_FILE="$(pwd)/.env"
+
+if [ -f "$ENV_FILE" ]; then
+  echo "Chargement des variables depuis $ENV_FILE..."
+  source "$ENV_FILE"
 else
-  echo "Erreur : le fichier .env n'existe pas. Veuillez le créer avec vos valeurs."
+  echo "Erreur : le fichier .env n'existe pas dans $(pwd). Veuillez le créer avec vos valeurs."
   exit 1
 fi
 
-# Vérification de la présence des variables essentielles
+# Vérification des variables essentielles
 if [ -z "$DOMAIN" ] || [ -z "$IP" ] || [ -z "$PORT" ] || [ -z "${MAIL_USERS[*]}" ]; then
-  echo "Erreur : les variables DOMAIN, IP, PORT ou MAIL_USERS ne sont pas définies dans le fichier .env."
+  echo "Erreur : certaines variables essentielles sont manquantes dans $ENV_FILE."
   exit 1
 fi
 
-POSTFIX_CONF="/etc/postfix/main.cf"
-VMAIL_DIR="/var/mail/vmail"
+POSTFIX_CONF="$POSTFIX_CONF"
 PASSWORD_FILE="/etc/postfix/virtual_mailbox_passwords"
-ENV_FILE="/etc/postfix/mail_users.env"
 
 # Mise à jour et installation des dépendances
 echo "Mise à jour et installation des paquets nécessaires..."
@@ -27,8 +27,8 @@ apt install -y postfix dovecot-core dovecot-imapd dovecot-pop3d mailutils bind9 
 
 # Configuration des groupes et des utilisateurs virtuels
 echo "Configuration des utilisateurs virtuels..."
-groupadd -g $VMAIL_GID $VMAIL_USER
-useradd -m -d $VMAIL_DIR -u $VMAIL_UID -g $VMAIL_GID -s /usr/sbin/nologin $VMAIL_USER
+groupadd -g $VMAIL_GID $VMAIL_USER || true
+useradd -m -d $VMAIL_DIR -u $VMAIL_UID -g $VMAIL_GID -s /usr/sbin/nologin $VMAIL_USER || true
 mkdir -p $VMAIL_DIR
 chown -R $VMAIL_USER:$VMAIL_USER $VMAIL_DIR
 
@@ -102,17 +102,16 @@ _dmarc  IN  TXT     "v=DMARC1; p=none; rua=mailto:dmarc@$DOMAIN"
 EOF
 
 # Création des mots de passe pour les utilisateurs virtuels
-echo "Création ou utilisation des mots de passe pour les utilisateurs virtuels..."
+echo "Création des mots de passe pour les utilisateurs virtuels..."
 touch $PASSWORD_FILE
 chmod 600 $PASSWORD_FILE
 for user in "${MAIL_USERS[@]}"; do
     VAR_NAME="${user^^}_PASSWORD"
     PASSWORD=${!VAR_NAME}
 
-    # Si aucun mot de passe n'est défini dans le fichier .env, en générer un
     if [ -z "$PASSWORD" ]; then
-        PASSWORD=$(openssl rand -base64 12)
-        echo "${VAR_NAME}=$PASSWORD" >> $ENV_FILE
+        echo "Erreur : le mot de passe pour $user est manquant dans $ENV_FILE."
+        exit 1
     fi
 
     echo "$user@$DOMAIN $VMAIL_DIR/$DOMAIN/$user/" >> /etc/postfix/virtual_mailbox_maps
@@ -129,4 +128,4 @@ systemctl restart bind9
 systemctl restart opendkim
 
 echo "Configuration terminée avec succès."
-echo "Les mots de passe sont sauvegardés dans $ENV_FILE."
+echo "Les mots de passe ont été utilisés à partir de $ENV_FILE."
