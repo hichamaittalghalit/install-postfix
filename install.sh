@@ -65,7 +65,8 @@ sudo apt-get update -y
 sudo debconf-set-selections <<< "postfix postfix/mailname string $DOMAIN"
 sudo debconf-set-selections <<< "postfix postfix/main_mailer_type string 'Internet Site'"
 
-sudo apt-get install -y postfix dovecot-imapd dovecot-pop3d opendkim opendkim-tools openssl
+sudo apt-get install -y postfix dovecot-imapd dovecot-pop3d opendkim opendkim-tools openssl nginx certbot python3-certbot-nginx bind9
+
 
 # Create vmail user/group if not exists
 if ! id "$VMAIL_USER" &>/dev/null; then
