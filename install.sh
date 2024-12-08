@@ -102,14 +102,21 @@ _dmarc  IN  TXT     "v=DMARC1; p=none; rua=mailto:dmarc@$DOMAIN"
 EOF
 
 # Création des mots de passe pour les utilisateurs virtuels
-echo "Création des mots de passe pour les utilisateurs virtuels..."
+echo "Création ou utilisation des mots de passe pour les utilisateurs virtuels..."
 touch $PASSWORD_FILE
 chmod 600 $PASSWORD_FILE
 for user in "${MAIL_USERS[@]}"; do
-    PASSWORD=$(openssl rand -base64 12)
+    VAR_NAME="${user^^}_PASSWORD"
+    PASSWORD=${!VAR_NAME}
+
+    # Si aucun mot de passe n'est défini dans le fichier .env, en générer un
+    if [ -z "$PASSWORD" ]; then
+        PASSWORD=$(openssl rand -base64 12)
+        echo "${VAR_NAME}=$PASSWORD" >> $ENV_FILE
+    fi
+
     echo "$user@$DOMAIN $VMAIL_DIR/$DOMAIN/$user/" >> /etc/postfix/virtual_mailbox_maps
     echo "$user@$DOMAIN:$PASSWORD" >> $PASSWORD_FILE
-    echo "${user^^}_PASSWORD=$PASSWORD" >> $ENV_FILE
 done
 
 postmap /etc/postfix/virtual_mailbox_maps
