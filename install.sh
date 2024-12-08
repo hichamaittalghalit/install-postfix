@@ -462,7 +462,7 @@ echo "Creating NGINX configuration for $DOMAIN ..."
 sudo tee "$NGINX_CONF" > /dev/null <<EOF
 server {
     listen 80;
-    server_name $DOMAIN_NAME *.${DOMAIN_NAME};
+    server_name $DOMAIN *.${DOMAIN};
 
     # Redirect all HTTP requests to HTTPS
     return 301 https://\$host\$request_uri;
@@ -491,7 +491,7 @@ echo "Adding SSL configuration to NGINX configuration for $DOMAIN ..."
 sudo tee "$NGINX_CONF" > /dev/null <<EOF
 server {
     listen 80;
-    server_name $DOMAIN_NAME *.$DOMAIN_NAME;
+    server_name $DOMAIN *.$DOMAIN;
 
     # Redirect all HTTP requests to HTTPS
     return 301 https://\$host\$request_uri;
