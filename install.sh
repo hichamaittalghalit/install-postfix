@@ -20,6 +20,12 @@ fi
 POSTFIX_CONF="$POSTFIX_CONF"
 PASSWORD_FILE="/etc/postfix/virtual_mailbox_passwords"
 
+# Configuration de debconf pour Postfix (mode non-interactif)
+echo "Configuration de debconf pour une installation silencieuse de Postfix..."
+export DEBIAN_FRONTEND=noninteractive
+echo "postfix postfix/main_mailer_type string Internet Site" | debconf-set-selections
+echo "postfix postfix/mailname string $DOMAIN" | debconf-set-selections
+
 # Mise à jour et installation des dépendances
 echo "Mise à jour et installation des paquets nécessaires..."
 apt update && apt upgrade -y
