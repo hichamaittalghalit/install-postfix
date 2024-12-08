@@ -34,6 +34,16 @@ function get_password_for_user {
 # Reset environment (remove all services used)
 ############################################
 
+
+# Uninstall apache if it's installed
+if systemctl is-active --quiet apache2; then
+    echo "Stopping and removing Apache..."
+    sudo systemctl stop apache2
+    sudo apt remove apache2 -y
+    sudo apt purge apache2 -y
+    sudo apt autoremove -y
+fi
+
 echo "Purging existing Postfix, Dovecot, OpenDKIM configurations..."
 
 sudo systemctl stop postfix dovecot opendkim || true
@@ -253,8 +263,27 @@ sudo chmod 600 /etc/ssl/private/mail.key
 
 echo "Configuring OpenDKIM..."
 
-sudo mkdir -p /etc/opendkim/keys
-sudo chown -R opendkim:opendkim /etc/opendkim
+DKIM_KEY_DIR="/etc/opendkim/keys/$DOMAIN"
+DKIM_SELECTOR="default"
+DKIM_KEY_PUBLIC_FILE="$DKIM_KEY_DIR/$DKIM_SELECTOR.txt"
+DKIM_KEY_PRIVATE_FILE="$DKIM_KEY_DIR/$DKIM_SELECTOR.private"
+
+# Create the OpenDKIM user and group if they don't exist
+if ! id "opendkim" &>/dev/null; then
+    echo "Creating OpenDKIM user..."
+    sudo adduser --system --group --no-create-home opendkim
+fi
+
+# Remove existing dkim folder if it exists
+if [ -d "$DKIM_KEY_DIR" ]; then
+    echo "Removing existing dkim folder: $DKIM_KEY_DIR"
+    sudo rm -rf "$DKIM_KEY_DIR"
+fi
+
+sudo mkdir -p $DKIM_KEY_DIR
+sudo opendkim-genkey -D "$DKIM_KEY_DIR/" -d "$DOMAIN" -s "$DKIM_SELECTOR" -b 1024
+sudo chown -R opendkim:opendkim $DKIM_KEY_DIR
+sudo chmod +r $DKIM_KEY_PUBLIC_FILE
 sudo chmod go-w /etc/opendkim
 sudo chmod 700 /etc/opendkim/keys
 
@@ -310,7 +339,17 @@ sudo systemctl restart postfix
 # Setup Bind9 DNS Server
 ############################################
 
+
 echo "Installing and configuring Bind9 for DNS..."
+# Set up paths and variables
+ZONE_DIR="/etc/bind/zones"
+ZONE_FILE="$ZONE_DIR/db.$DOMAIN"
+
+# Remove existing zone file if it exists
+if [ -f "$ZONE_FILE" ]; then
+    echo "Removing existing zone file: $ZONE_FILE"
+    sudo rm "$ZONE_FILE"
+fi
 
 sudo apt-get install -y bind9 bind9utils
 
@@ -333,41 +372,178 @@ zone "$DOMAIN" {
 };
 EOF
 
-# Extract DKIM selector from DKIM record. Usually 'default._domainkey'
-DKIM_SELECTOR="default._domainkey"
+DKIM_VALUE=$(cat "$DKIM_KEY_PUBLIC_FILE" | tr -d '\t' | tr -d '\n' | grep -oP '\(\s*\K[^)]*' | tr -d ' "' | sed 's/;/; /g')
 
-# SPF record
-SPF_RECORD="v=spf1 mx a ip4:$IP ~all"
-# DMARC record
-DMARC_RECORD="v=DMARC1; p=none; rua=mailto:postmaster@$DOMAIN; ruf=mailto:postmaster@$DOMAIN; fo=1"
-
-# Write DNS zone file
-sudo tee /etc/bind/db.$DOMAIN > /dev/null <<EOF
-\$TTL    300
-@       IN      SOA     ns1.$DOMAIN. hostmaster.$DOMAIN. (
+# Write the zone file with correct formatting
+sudo tee "$ZONE_FILE" > /dev/null <<EOF
+\$TTL 300
+@   IN  SOA ns1.$DOMAIN. admin.$DOMAIN. (
         $SERIAL     ; Serial (YYYYMMDD01 format)
         3600        ; Refresh - 1 hour
         1800        ; Retry - 30 minutes
         1209600     ; Expire - 2 weeks
         300 )       ; Minimum TTL - 5 minutes
 
+; Name Servers
 @   IN  NS  ns1.$DOMAIN.
 @   IN  NS  ns2.$DOMAIN.
 
+; A Records
 @       IN  A   $IP
 ns1     IN  A   $IP
 ns2     IN  A   $IP
 mail    IN  A   $IP
 www     IN  A   $IP
 
-@       IN      MX      10 mail.$DOMAIN.
+; MX Record
+@   IN  MX  10 mail.$DOMAIN.
 
-@       IN      TXT     "$SPF_RECORD"
-_dmarc  IN      TXT     "$DMARC_RECORD"
-$DKIM_SELECTOR IN TXT    ("$DKIM_VALUE")
+; SPF Record
+@   IN  TXT "v=spf1 ip4:$IP ~all"
+
+; DKIM TXT Record
+$DKIM_SELECTOR._domainkey IN TXT "$DKIM_VALUE"
+
+; DMARC Record
+_dmarc IN TXT "v=DMARC1; p=quarantine; rua=mailto:$SUPPORT_EMAIL; ruf=mailto:$SUPPORT_EMAIL; pct=100; aspf=s;"
 EOF
 
+# Setup BIND configuration
+echo "Setting up BIND for $DOMAIN..."
+if ! grep -q "zone \"$DOMAIN\"" /etc/bind/named.conf.local; then
+    echo "zone \"$DOMAIN\" {
+    type master;
+    file \"$ZONE_FILE\";
+};" | sudo tee -a /etc/bind/named.conf.local
+fi
+
+# Check and reload BIND configuration
+echo "Checking BIND configuration..."
+sudo named-checkconf
+sudo named-checkzone "$DOMAIN" "$ZONE_FILE"
+
 sudo systemctl restart bind9
+
+###########################################
+# NGINX HTTPS 
+###########################################
+# Define the NGINX configuration paths
+NGINX_CONF_PATH="/etc/nginx/sites-available/$DOMAIN"
+NGINX_ENABLED_LINK="/etc/nginx/sites-enabled/$DOMAIN"
+DEFAULT_CONF_PATH="/etc/nginx/sites-available/default"
+DEFAULT_ENABLED_LINK="/etc/nginx/sites-enabled/default"
+
+# Step 1: Remove old NGINX configuration if it exists
+if [ -e "$NGINX_CONF_PATH" ]; then
+    echo "Deleting old NGINX configuration in $NGINX_CONF_PATH ..."
+    sudo rm -rf "$NGINX_CONF_PATH"
+fi
+
+# Step 2: Remove the symlink if it exists
+if [ -L "$NGINX_ENABLED_LINK" ]; then
+    echo "Removing existing symbolic link for $DOMAIN ..."
+    sudo rm "$NGINX_ENABLED_LINK"
+elif [ -e "$NGINX_ENABLED_LINK" ]; then
+    echo "Removing existing file for $DOMAIN ..."
+    sudo rm -f "$NGINX_ENABLED_LINK"
+fi
+
+# Step 3: Create the NGINX configuration directory
+sudo mkdir -p "$NGINX_CONF_PATH"
+
+# Step 4: Create the initial NGINX configuration for the domain (HTTP only)
+NGINX_CONF="$NGINX_CONF_PATH/nginx.conf"
+echo "Creating NGINX configuration for $DOMAIN ..."
+sudo tee "$NGINX_CONF" > /dev/null <<EOF
+server {
+    listen 80;
+    server_name $DOMAIN_NAME *.${DOMAIN_NAME};
+
+    # Redirect all HTTP requests to HTTPS
+    return 301 https://\$host\$request_uri;
+}
+EOF
+
+# Step 5: Create the web root directory
+sudo mkdir -p "/var/www/$DOMAIN"
+echo "<h1>Welcome to $DOMAIN</h1>" | sudo tee "/var/www/$DOMAIN/index.html" > /dev/null
+
+# Step 6: Create a symbolic link in sites-enabled
+echo "Creating symlink to NGINX configuration in sites-enabled ..."
+sudo ln -s "$NGINX_CONF" "$NGINX_ENABLED_LINK"
+
+# Step 7: Obtain the certificate for the main domain and wildcard subdomain
+echo "Obtaining TLS certificate for $DOMAIN..."
+
+if ! sudo certbot --nginx -d "$DOMAIN" -d "www.$DOMAIN" --non-interactive --agree-tos --email "$SUPPORT_EMAIL"; then
+    echo "Failed to obtain SSL certificate. Please check the errors above."
+    exit 1
+fi
+
+# Step 8: Append the SSL configuration to the NGINX configuration
+echo "Adding SSL configuration to NGINX configuration for $DOMAIN ..."
+# Create or overwrite the NGINX configuration
+sudo tee "$NGINX_CONF" > /dev/null <<EOF
+server {
+    listen 80;
+    server_name $DOMAIN_NAME *.$DOMAIN_NAME;
+
+    # Redirect all HTTP requests to HTTPS
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name $DOMAIN *.$DOMAIN;
+
+    # SSL certificate paths
+    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;  # Change this path if necessary
+    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;  # Change this path if necessary
+
+    # Root directory and index file
+    root /var/www/$DOMAIN;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ =404;  # Serve files or return 404
+    }
+}
+EOF
+
+# Step 9: Test the NGINX configuration
+echo "Testing the NGINX configuration..."
+if sudo nginx -t; then
+    echo "NGINX configuration is valid. Reloading NGINX..."
+    sudo systemctl reload nginx
+else
+    echo "NGINX configuration test failed. Please check the configuration file for errors."
+    exit 1  # Exit with an error status
+fi
+
+# Step 10: Set up automatic renewal with a cron job
+if ! crontab -l | grep -q "certbot renew"; then
+    (crontab -l 2>/dev/null; echo "0 3 * * * /usr/bin/certbot renew --quiet") | crontab -
+fi
+
+echo "TLS certificate installed for $DOMAIN with auto-renewal configured."
+
+# Optional: Self-Signed Certificate Setup (if needed)
+DAYS_VALID=365
+SELF_SIGNED_CERT_DIR="/etc/ssl/selfsigned"
+SELF_SIGNED_CERT_KEY="${SELF_SIGNED_CERT_DIR}/selfsigned.key"
+SELF_SIGNED_CERT_CRT="${SELF_SIGNED_CERT_DIR}/selfsigned.crt"
+
+# Create directory for self-signed certs
+sudo mkdir -p "${SELF_SIGNED_CERT_DIR}"
+
+# Generate a self-signed certificate for the IP address
+sudo openssl req -x509 -nodes -days "${DAYS_VALID}" -newkey rsa:2048 \
+    -keyout "${SELF_SIGNED_CERT_KEY}" -out "${SELF_SIGNED_CERT_CRT}" \
+    -subj "/CN=${ADDRESS_IP}"
+
+echo "Self-signed certificate created:"
+echo "Key: ${SELF_SIGNED_CERT_KEY}"
+echo "Certificate: ${SELF_SIGNED_CERT_CRT}"
 
 ############################################
 # Restart Services
@@ -378,6 +554,7 @@ sudo systemctl restart opendkim
 sudo systemctl restart postfix
 sudo systemctl restart dovecot
 sudo systemctl restart bind9
+sudo systemctl restart nginx
 
 echo "Postfix, Dovecot, OpenDKIM, and DNS configuration completed without printing DNS instructions."
 echo "Ensure your domain's nameservers point to this server to use the configured DNS records."
